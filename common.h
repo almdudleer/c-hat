@@ -6,8 +6,8 @@
 #define CHAT_COMMON_H
 
 #define PORT 12415
-#define MAXBUFF 512 //TODO: read unlimited
-#define MAXNAME 256 //TODO: read unlimited
+#define MAXBUFF 512 //TODO: unlimited message size
+#define MAXNAME 256
 #define SA struct sockaddr
 
 #endif //CHAT_COMMON_H

@@ -40,7 +40,7 @@ typedef struct {
 int sock_fd = 0;
 int num_clients = 0;
 long message_num = 0;
-char* inetaddr = "127.0.0.1";
+char* inetaddr = "127.0.0.1"; // TODO: address from argv
 client** clients;
 
 struct sockaddr_in servaddr;
@@ -48,14 +48,14 @@ struct sockaddr_in servaddr;
 // ------------------ utility functions ----------------- //
 
 command* parse_cmd(char* input) {
-    char *firstWord, *secondWord, *remainder, *context;
+    char* firstWord, * secondWord, * remainder, * context;
 
     int inputLength = strlen(input);
-    char *inputCopy = (char*) calloc(inputLength + 1, sizeof(char));
+    char* inputCopy = (char*) calloc(inputLength + 1, sizeof(char));
     strncpy(inputCopy, input, inputLength);
 
-    firstWord = strtok_r (inputCopy, " ", &context);
-    secondWord = strtok_r (NULL, " ", &context);
+    firstWord = strtok_r(inputCopy, " ", &context);
+    secondWord = strtok_r(NULL, " ", &context);
     remainder = context;
 
     command* cmd = malloc(sizeof(cmd));
@@ -89,16 +89,26 @@ command* parse_cmd(char* input) {
     return cmd;
 }
 
-int set_name(client* sender, char* new_name) { //TODO: prohibit "server"
+// utilities for client names
+client* get_clnt_by_name(char* name) {
     for (int clnt_num = 0; clnt_num < num_clients; clnt_num++) {
-        if (strcmp(clients[clnt_num]->name, new_name) == 0)
-            return false;
+        if (strcmp(clients[clnt_num]->name, name) == 0)
+            return clients[clnt_num];
     }
-    sender->name = new_name;
-    return true;
+    return NULL;
 }
 
-// utilities to create server messages without working with msg
+int set_clnt_name(client* sender, char* new_name) {
+    if (strcmp(new_name, "server") == 0)
+        return false;
+    if (get_clnt_by_name(new_name) == NULL) {
+        sender->name = new_name;
+        return true;
+    }
+    return false;
+}
+
+// utilities to create messages without working with msg
 msg* make_server_private_message(client* receiver, char* text) {
     msg* message = malloc(sizeof(msg));
     message->server_message = true;
@@ -113,6 +123,15 @@ msg* make_server_public_message(char* text) {
     message->server_message = true;
     message->receiver = NULL;
     message->sender = NULL;
+    message->text = text;
+    return message;
+}
+
+msg* make_client_private_message(client* sender, client* receiver, char* text) {
+    msg* message = malloc(sizeof(msg));
+    message->server_message = false;
+    message->receiver = receiver;
+    message->sender = sender;
     message->text = text;
     return message;
 }
@@ -136,7 +155,7 @@ void* broadcast_msg(void* args) {
     }
     for (int clnt_num = 0; clnt_num < num_clients; clnt_num++) {
         if (message->sender == NULL || message->sender->conn_fd != clients[clnt_num]->conn_fd) {
-            int num_bytes = send(clients[clnt_num]->conn_fd, final_text, strlen(final_text)+1, 0);
+            int num_bytes = send(clients[clnt_num]->conn_fd, final_text, strlen(final_text) + 1, 0);
             if (num_bytes == -1) {
                 perror("broadcast message failed");
             }
@@ -160,7 +179,7 @@ void* unicast_msg(void* args) {
     if (DEBUG_MSGS) {
         puts(final_text);
     }
-    int num_bytes = send(message->receiver->conn_fd, final_text, strlen(final_text)+1, 0);
+    int num_bytes = send(message->receiver->conn_fd, final_text, strlen(final_text) + 1, 0);
     if (num_bytes == -1) {
         perror("unicast message failed");
     }
@@ -193,6 +212,11 @@ int send_server_public_message(char* text) {
     return 0;
 }
 
+int send_client_private_message(client* sender, client* receiver, char* text) {
+    unicast_parallel(make_client_private_message(sender, receiver, text));
+    return 0;
+}
+
 // ------------------- client thread -------------------- //
 // one thread per client
 void* client_worker(void* args) {
@@ -201,7 +225,7 @@ void* client_worker(void* args) {
     int n;
     int cont = 1;
 
-    char *mtext = malloc(MAXNAME + 20);
+    char* mtext = malloc(MAXNAME + 20);
     sprintf(mtext, "%s connected", clnt->name);
     send_server_public_message(mtext);
     send_server_private_message(clnt, "type \\help to see the list of available commands");
@@ -229,7 +253,6 @@ void* client_worker(void* args) {
             // parse commands
             if (*(message->text) == '\\') {
                 message->text++;
-
                 if (*(message->text) != '\\') {
                     command* cmd = parse_cmd(message->text);
                     if (strcmp(cmd->cmd, "exit") == 0) {
@@ -237,20 +260,31 @@ void* client_worker(void* args) {
                         mtext = malloc(MAXNAME + 20);
                         sprintf(mtext, "%s left", clnt->name);
                         send_server_public_message(mtext);
-                    }
-                    else if (strcmp(cmd->cmd, "name") == 0) {
+                    } else if (strcmp(cmd->cmd, "name") == 0) {
                         char* old_name = malloc(MAXNAME);
                         strncpy(old_name, message->sender->name, strlen(message->sender->name));
-                        if (set_name(message->sender, cmd->arg)) {
+                        if (set_clnt_name(message->sender, cmd->arg)) {
                             send_server_private_message(clnt, "successfully changed name");
-                            mtext = malloc(2*MAXNAME+50);
+                            mtext = malloc(2 * MAXNAME + 50);
                             sprintf(mtext, "%s changed name to %s", old_name, message->sender->name);
                             send_server_public_message(mtext);
                         } else {
                             send_server_private_message(clnt, "error changing name, try another name");
                         }
                     } else if (strcmp(cmd->cmd, "help") == 0) {
-                        send_server_private_message(clnt, "\n\t\\help -- see this help\n\t\\name <new name> -- change name\n\t\\wisp <name> message -- send private message\n\t\\file <path> <name> -- send file");
+                        send_server_private_message(clnt,
+                                                    "\n\t\\help -- see this help\n\t\\name <new name> -- change name\n\t\\wisp <name> message -- send private message\n\t\\file <path> <name> -- send file");
+                    } else if (strcmp(cmd->cmd, "wisp") == 0) {
+                        client* receiver = get_clnt_by_name(cmd->arg);
+                        if (receiver != NULL) {
+                            send_client_private_message(clnt, receiver, cmd->remainder);
+                        } else {
+                            mtext = malloc(MAXNAME + 50);
+                            sprintf(mtext, "%s -- no such user", cmd->arg);
+                            send_server_private_message(clnt, mtext);
+                        }
+                    } else if (strcmp(cmd->cmd, "file") == 0) {
+                        send_server_private_message(clnt, "feature is under construction");
                     } else {
                         send_server_private_message(message->sender, "no such command");
                     }
@@ -318,7 +352,7 @@ int accept_clients() {
         new_client->conn_fd = conn_fd;
         new_client->addr = addr;
         new_client->name = malloc(MAXNAME); //TODO: if name is larger
-        sprintf(new_client->name,"%d", new_client->addr.sin_port);
+        sprintf(new_client->name, "%d", new_client->addr.sin_port);
         pthread_t new_thread;
         if (pthread_create(&new_thread, NULL, client_worker, new_client) != 0) {
             perror("client thread creation failed");
